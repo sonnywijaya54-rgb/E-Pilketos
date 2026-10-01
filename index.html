@@ -1,0 +1,1762 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">Pemilihan Ketua OSIS</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #3b82f6;
+            width: 24px;
+            height: 24px;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media print {
+            body { background-color: white; }
+            .no-print { display: none !important; }
+        }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-osis-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let currentUser = null; 
+        let adminRole = null; // 'operator' or 'superadmin'
+        
+        const basePath = `artifacts/${appId}`;
+        const publicDataPath = `${basePath}/public/data`;
+
+        let candidatesData = [];
+        let votersData = [];
+        let auditLogsData = [];
+        let configData = { 
+            resultsPublished: false,
+            appTitle: 'E-Pilketos',
+            appSubtitle: 'Sistem Pemilihan Ketua OSIS Digital',
+            logoUrl: '',
+            heroImage: '',
+            allowBlankVote: true,
+            startTime: '',
+            endTime: ''
+        };
+
+        async function initApp() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                await initializeDefaultData();
+                listenToConfig();
+                listenToCandidates();
+                listenToVoters();
+                listenToAuditLogs();
+
+                renderView('home');
+                hideLoading();
+
+            } catch (error) {
+                console.error("Initialization error:", error);
+                showToast("Gagal terhubung ke database. Muat ulang halaman.", "error");
+            }
+        }
+
+        async function logActivity(action, details) {
+            try {
+                const logsRef = collection(db, publicDataPath, 'audit_logs');
+                await addDoc(logsRef, {
+                    action: action,
+                    details: details,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (e) {
+                console.error("Failed to log activity:", e);
+            }
+        }
+
+        async function initializeDefaultData() {
+            const configRef = doc(db, publicDataPath, 'config', 'settings');
+            const configSnap = await getDoc(configRef);
+            
+            if (!configSnap.exists()) {
+                await setDoc(configRef, { 
+                    resultsPublished: false,
+                    appTitle: 'E-Pilketos',
+                    appSubtitle: 'Sistem Pemilihan Ketua OSIS Digital',
+                    logoUrl: '',
+                    heroImage: '',
+                    allowBlankVote: true,
+                    startTime: '',
+                    endTime: ''
+                });
+            } else {
+                configData = configSnap.data();
+                applyWebsiteConfig();
+            }
+
+            const candidatesRef = collection(db, publicDataPath, 'candidates');
+            const candidatesSnap = await getDocs(candidatesRef);
+            
+            if (candidatesSnap.empty) {
+                await setDoc(doc(db, publicDataPath, 'candidates', '1'), {
+                    id: '1',
+                    name: 'Paslon 1 (Andi & Siska)',
+                    vision: 'Mewujudkan OSIS yang aktif, kreatif, dan berakhlak mulia.',
+                    mission: '1. Mengadakan kegiatan seni dan olahraga rutin.\n2. Meningkatkan transparansi program kerja.',
+                    proker: '1. Festival Budaya Tahunan\n2. Kotak Aspirasi Digital Siswa',
+                    votes: 0
+                });
+                await setDoc(doc(db, publicDataPath, 'candidates', '2'), {
+                    id: '2',
+                    name: 'Paslon 2 (Budi & Rina)',
+                    vision: 'Menjadikan OSIS sebagai wadah aspirasi siswa yang inovatif dan berprestasi.',
+                    mission: '1. Memperkuat kedisiplinan dan solidaritas antar angkatan.\n2. Mengoptimalkan klub ekstrakurikuler.',
+                    proker: '1. Liga E-Sport Antar Kelas\n2. Workshop Kewirausahaan Remaja',
+                    votes: 0
+                });
+            }
+        }
+
+        function listenToConfig() {
+            const configRef = doc(db, publicDataPath, 'config', 'settings');
+            onSnapshot(configRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    configData = docSnap.data();
+                    applyWebsiteConfig();
+                    const currentView = document.getElementById('current-view-name').value;
+                    if (currentView === 'home' || currentView === 'student-results') {
+                        renderView(currentView, false); 
+                    } else if (currentView === 'admin-dashboard') {
+                        updateAdminPublishStatus();
+                    }
+                }
+            }, (error) => console.error("Config listen error:", error));
+        }
+
+        window.updateAdminPublishStatus = function() {
+            const toggle = document.getElementById('publish-toggle');
+            if (toggle) toggle.checked = !!configData.resultsPublished;
+            const blankToggle = document.getElementById('blank-toggle');
+            if (blankToggle) blankToggle.checked = configData.allowBlankVote !== false;
+        };
+
+        function applyWebsiteConfig() {
+            const titleEl = document.getElementById('page-title');
+            if (titleEl && configData.appTitle) titleEl.innerText = configData.appTitle;
+            
+            const brandText = document.getElementById('navbar-brand-text');
+            if (brandText && configData.appTitle) brandText.innerText = configData.appTitle;
+
+            const logoContainer = document.getElementById('navbar-logo-container');
+            if (logoContainer) {
+                if (configData.logoUrl) {
+                    logoContainer.innerHTML = `<img src="${configData.logoUrl}" alt="Logo" class="w-full h-full object-cover rounded" onerror="this.onerror=null;this.parentNode.innerHTML='E';">`;
+                    logoContainer.classList.remove('bg-blue-600', 'text-white');
+                } else {
+                    logoContainer.innerHTML = 'E';
+                    logoContainer.classList.add('bg-blue-600', 'text-white');
+                }
+            }
+        }
+
+        function listenToCandidates() {
+            const candidatesRef = collection(db, publicDataPath, 'candidates');
+            onSnapshot(candidatesRef, (snapshot) => {
+                candidatesData = [];
+                snapshot.forEach((doc) => {
+                    candidatesData.push({ docId: doc.id, ...doc.data() });
+                });
+                candidatesData.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+                
+                const currentView = document.getElementById('current-view-name').value;
+                if (currentView === 'voting') renderVotingCards();
+                if (currentView === 'admin-dashboard') {
+                    renderAdminLiveResults();
+                    renderAdminCandidatesForm();
+                }
+                if (currentView === 'student-results') renderStudentResultsData();
+            }, (error) => console.error("Candidates listen error:", error));
+        }
+
+        function listenToVoters() {
+            const votersRef = collection(db, publicDataPath, 'voters');
+            onSnapshot(votersRef, (snapshot) => {
+                votersData = [];
+                snapshot.forEach((doc) => {
+                    votersData.push({ nisn: doc.id, ...doc.data() });
+                });
+                const currentView = document.getElementById('current-view-name').value;
+                if (currentView === 'admin-dashboard') {
+                    renderAdminVotersTable();
+                }
+            }, (error) => console.error("Voters listen error:", error));
+        }
+
+        function listenToAuditLogs() {
+            const logsRef = collection(db, publicDataPath, 'audit_logs');
+            onSnapshot(logsRef, (snapshot) => {
+                auditLogsData = [];
+                snapshot.forEach((doc) => {
+                    auditLogsData.push({ id: doc.id, ...doc.data() });
+                });
+                auditLogsData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                const currentView = document.getElementById('current-view-name').value;
+                if (currentView === 'admin-dashboard') {
+                    renderAdminAuditLogsTable();
+                }
+            }, (error) => console.error("Audit logs error:", error));
+        }
+
+        window.switchView = (viewName) => {
+            renderView(viewName);
+        };
+
+        function renderView(viewName, smooth = true) {
+            document.getElementById('current-view-name').value = viewName;
+            const container = document.getElementById('app-content');
+            
+            if (smooth) container.innerHTML = '<div class="flex justify-center py-20"><div class="loader"></div></div>';
+
+            setTimeout(() => {
+                switch (viewName) {
+                    case 'home':
+                        container.innerHTML = getHomeHTML();
+                        initCountdown();
+                        break;
+                    case 'admin-login':
+                        container.innerHTML = getAdminLoginHTML();
+                        break;
+                    case 'admin-dashboard':
+                        if (!adminRole) { renderView('home'); return; }
+                        container.innerHTML = getAdminDashboardHTML();
+                        renderAdminVotersTable();
+                        renderAdminCandidatesForm();
+                        renderAdminAppearanceForm();
+                        renderAdminAuditLogsTable();
+                        break;
+                    case 'voting':
+                        if (!currentUser || currentUser.hasVoted) { renderView('home'); return; }
+                        container.innerHTML = getVotingHTML();
+                        renderVotingCards();
+                        break;
+                    case 'student-results':
+                        container.innerHTML = getStudentResultsHTML();
+                        if (configData.resultsPublished) {
+                            renderStudentResultsData();
+                        }
+                        break;
+                    case 'voted-success':
+                        container.innerHTML = getVotedSuccessHTML();
+                        break;
+                    default:
+                        container.innerHTML = getHomeHTML();
+                }
+            }, smooth ? 300 : 0);
+        }
+
+        function checkElectionActiveStatus() {
+            if (!configData.startTime && !configData.endTime) return { active: true, message: '' };
+            const now = new Date().getTime();
+            if (configData.startTime) {
+                const start = new Date(configData.startTime).getTime();
+                if (now < start) return { active: false, message: 'Pemilihan belum dimulai.' };
+            }
+            if (configData.endTime) {
+                const end = new Date(configData.endTime).getTime();
+                if (now > end) return { active: false, message: 'Pemilihan sudah ditutup.' };
+            }
+            return { active: true, message: '' };
+        }
+
+        function initCountdown() {
+            const timerEl = document.getElementById('countdown-timer');
+            if (!timerEl) return;
+            if (!configData.endTime) {
+                timerEl.innerHTML = '<span class="text-slate-500 font-medium">Jadwal fleksibel (Aktif)</span>';
+                return;
+            }
+
+            const targetTime = new Date(configData.endTime).getTime();
+            const update = () => {
+                const now = new Date().getTime();
+                const distance = targetTime - now;
+                if (distance < 0) {
+                    timerEl.innerHTML = '<span class="text-red-600 font-bold">Pemilihan Telah Ditutup</span>';
+                    return;
+                }
+                const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+                timerEl.innerHTML = `<span class="bg-blue-50 text-blue-700 px-3 py-1 rounded font-mono font-bold">${hours}j ${minutes}m ${seconds}d</span> menuju penutupan`;
+            };
+            update();
+            setInterval(update, 1000);
+        }
+
+        function getHomeHTML() {
+            return `
+                <div class="max-w-4xl mx-auto fade-in">
+                    <div class="text-center mb-8">
+                        <div class="inline-flex items-center justify-center w-20 h-20 bg-blue-600 text-white rounded-full mb-4 shadow-lg overflow-hidden">
+                            ${configData.logoUrl ? `<img src="${configData.logoUrl}" class="w-full h-full object-cover" onerror="this.remove()">` : '<i class="fa-solid fa-check-to-slot text-4xl"></i>'}
+                        </div>
+                        <h1 class="text-3xl font-bold text-slate-800 mb-2">${escapeHTML(configData.appTitle || 'E-Pilketos')}</h1>
+                        <p class="text-slate-500 mb-4">${escapeHTML(configData.appSubtitle || 'Sistem Pemilihan Ketua OSIS Digital')}</p>
+                        <div id="countdown-timer" class="text-sm text-slate-600"></div>
+                    </div>
+
+                    ${configData.heroImage ? `
+                        <div class="mb-10 rounded-2xl overflow-hidden shadow-md max-h-72 border border-slate-200">
+                            <img src="${configData.heroImage}" alt="Banner" class="w-full h-full object-cover" onerror="this.parentElement.style.display='none'">
+                        </div>
+                    ` : ''}
+
+                    <div class="grid md:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center hover:shadow-md transition">
+                            <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4 text-xl">
+                                <i class="fa-solid fa-key"></i>
+                            </div>
+                            <h2 class="text-xl font-semibold mb-2">1. Dapatkan Token</h2>
+                            <p class="text-sm text-slate-500 mb-6 flex-grow">Gunakan Nama dan NISN kamu untuk mendapatkan token pemilihan sekali pakai.</p>
+                            <button onclick="openModal('token-modal')" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-medium py-2 px-4 rounded-lg transition">
+                                Cek Token Saya
+                            </button>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center hover:shadow-md transition relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
+                            <div class="w-12 h-12 bg-blue-500 text-white rounded-full flex items-center justify-center mb-4 text-xl shadow-md">
+                                <i class="fa-solid fa-person-booth"></i>
+                            </div>
+                            <h2 class="text-xl font-semibold mb-2">2. Mulai Memilih</h2>
+                            <p class="text-sm text-slate-500 mb-6 flex-grow">Masukkan token rahasia kamu untuk masuk ke bilik suara virtual.</p>
+                            <button onclick="handleLoginClick()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition shadow-sm hover:shadow">
+                                Login Token
+                            </button>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center hover:shadow-md transition">
+                            <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-4 text-xl">
+                                <i class="fa-solid fa-chart-pie"></i>
+                            </div>
+                            <h2 class="text-xl font-semibold mb-2">3. Lihat Hasil</h2>
+                            <p class="text-sm text-slate-500 mb-6 flex-grow">Cek perolehan suara setelah admin mempublikasikan hasil pemilihan.</p>
+                            ${configData.resultsPublished 
+                                ? `<button onclick="openModal('results-login-modal')" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 px-4 rounded-lg transition shadow-sm">Lihat Hasil</button>`
+                                : `<button disabled class="w-full bg-slate-100 text-slate-400 cursor-not-allowed font-medium py-2 px-4 rounded-lg">Belum Dipublikasi</button>`
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                ${getModalsHTML()}
+            `;
+        }
+
+        window.handleLoginClick = () => {
+            const status = checkElectionActiveStatus();
+            if (!status.active) {
+                showToast(status.message, 'warning');
+                return;
+            }
+            openModal('login-modal');
+        };
+
+        function getModalsHTML() {
+            return `
+                <!-- Token Modal -->
+                <div id="token-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden flex items-center justify-center z-50">
+                    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl transform scale-95 transition-transform" id="token-modal-content">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-semibold">Cek Token Pemilihan</h3>
+                            <button onclick="closeModal('token-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                        </div>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Nama Lengkap</label>
+                                <input type="text" id="check-name" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="Masukkan nama...">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">NISN</label>
+                                <input type="text" id="check-nisn" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="Masukkan NISN...">
+                            </div>
+                            <button onclick="handleCheckToken()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition flex justify-center items-center">
+                                <span id="btn-text-check">Dapatkan Token</span>
+                                <div id="btn-load-check" class="loader hidden ml-2 w-4 h-4 border-2 border-white border-top-transparent"></div>
+                            </button>
+                            
+                            <div id="token-result-area" class="hidden mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg text-center">
+                                <p class="text-sm text-slate-500 mb-1">Token Rahasia Kamu:</p>
+                                <div class="flex justify-center items-center gap-3 mb-2">
+                                    <p id="the-token" class="text-2xl font-mono font-bold text-blue-600 tracking-wider">---</p>
+                                    <button onclick="copyToken()" class="text-slate-400 hover:text-blue-600 transition p-1 bg-white border border-slate-200 rounded shadow-sm hover:shadow" title="Salin Token">
+                                        <i class="fa-solid fa-copy"></i>
+                                    </button>
+                                </div>
+                                <p class="text-xs text-red-500 font-medium"><i class="fa-solid fa-triangle-exclamation"></i> Catat dan JANGAN berikan ke siapapun!</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Login Modal -->
+                <div id="login-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden flex items-center justify-center z-50">
+                    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl transform scale-95 transition-transform" id="login-modal-content">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-semibold">Login Bilik Suara</h3>
+                            <button onclick="closeModal('login-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                        </div>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Token Pemilihan</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="login-token" class="flex-1 px-4 py-2 text-center text-xl tracking-widest font-mono border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none uppercase" placeholder="XXXXXX">
+                                    <button onclick="pasteToken()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg transition text-sm flex items-center gap-1 shadow-sm" title="Tempel Token dari Clipboard">
+                                        <i class="fa-solid fa-paste"></i> Tempel
+                                    </button>
+                                </div>
+                            </div>
+                            <button onclick="handleTokenLogin()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition flex justify-center items-center">
+                                <span id="btn-text-login">Masuk ke Bilik Suara</span>
+                                <div id="btn-load-login" class="loader hidden ml-2 w-4 h-4 border-2 border-white border-top-transparent"></div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Login Modal -->
+                <div id="results-login-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden flex items-center justify-center z-50">
+                    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl transform scale-95 transition-transform" id="results-modal-content">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-semibold">Akses Hasil Pemilihan</h3>
+                            <button onclick="closeModal('results-login-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                        </div>
+                        <p class="text-sm text-slate-500 mb-4">Hanya siswa yang telah memberikan hak suaranya yang dapat melihat hasil.</p>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Nama Lengkap</label>
+                                <input type="text" id="res-name" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">NISN</label>
+                                <input type="text" id="res-nisn" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+                            </div>
+                            <button onclick="handleResultsLogin()" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2.5 rounded-lg transition flex justify-center items-center">
+                                <span id="btn-text-res">Lihat Hasil</span>
+                                <div id="btn-load-res" class="loader hidden ml-2 w-4 h-4 border-2 border-white border-top-transparent"></div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.openModal = (id) => {
+            const modal = document.getElementById(id);
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                const content = document.getElementById(id + '-content');
+                if (content) {
+                    content.classList.remove('scale-95');
+                    content.classList.add('scale-100');
+                }
+            }, 10);
+        };
+        
+        window.closeModal = (id) => {
+            const content = document.getElementById(id + '-content');
+            if (content) {
+                content.classList.remove('scale-100');
+                content.classList.add('scale-95');
+            }
+            setTimeout(() => {
+                const modal = document.getElementById(id);
+                if (modal) modal.classList.add('hidden');
+            }, 150);
+        };
+
+        window.copyToken = () => {
+            const tokenEl = document.getElementById('the-token');
+            if (!tokenEl) return;
+            const token = tokenEl.innerText;
+            if (token && token !== '---') {
+                const hiddenInput = document.createElement('input');
+                hiddenInput.value = token;
+                document.body.appendChild(hiddenInput);
+                hiddenInput.select();
+                hiddenInput.setSelectionRange(0, 99999);
+                try {
+                    document.execCommand('copy');
+                    showToast('Token berhasil disalin!', 'success');
+                } catch (err) {
+                    showToast('Gagal menyalin token', 'error');
+                }
+                document.body.removeChild(hiddenInput);
+            }
+        };
+
+        window.pasteToken = async () => {
+            try {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    const text = await navigator.clipboard.readText();
+                    const loginTokenInput = document.getElementById('login-token');
+                    if (loginTokenInput) {
+                        loginTokenInput.value = text.trim();
+                        showToast('Token berhasil ditempel!', 'success');
+                    }
+                } else {
+                    showToast('Gunakan shortcut Ctrl+V pada keyboard Anda.', 'info');
+                }
+            } catch (err) {
+                showToast('Gagal menempel otomatis. Gunakan Ctrl+V.', 'warning');
+            }
+        };
+
+        window.handleCheckToken = async () => {
+            const nameEl = document.getElementById('check-name');
+            const nisnEl = document.getElementById('check-nisn');
+            if (!nameEl || !nisnEl) return;
+            
+            const name = nameEl.value.trim();
+            const nisn = nisnEl.value.trim();
+            if (!name || !nisn) return showToast('Nama dan NISN harus diisi', 'warning');
+            
+            setBtnLoading('check', true);
+            try {
+                const voterRef = doc(db, publicDataPath, 'voters', nisn);
+                const voterSnap = await getDoc(voterRef);
+                
+                if (voterSnap.exists()) {
+                    const data = voterSnap.data();
+                    if (data.name.toLowerCase() === name.toLowerCase()) {
+                        const resultArea = document.getElementById('token-result-area');
+                        const theToken = document.getElementById('the-token');
+                        if (resultArea) resultArea.classList.remove('hidden');
+                        if (theToken) theToken.innerText = data.token;
+                        if(data.hasVoted) showToast('Perhatian: Anda sudah menggunakan hak suara.', 'info');
+                        logActivity('Cek Token', `Siswa ${name} (${nisn}) meminta token pemilihan.`);
+                    } else {
+                        showToast('Data tidak cocok. Periksa kembali ejaan Nama.', 'error');
+                    }
+                } else {
+                    showToast('NISN tidak terdaftar.', 'error');
+                }
+            } catch (error) {
+                showToast('Terjadi kesalahan', 'error');
+            }
+            setBtnLoading('check', false);
+        };
+
+        window.handleTokenLogin = async () => {
+            const status = checkElectionActiveStatus();
+            if (!status.active) {
+                showToast(status.message, 'warning');
+                return;
+            }
+
+            const tokenInput = document.getElementById('login-token');
+            if (!tokenInput) return;
+            const token = tokenInput.value.trim().toUpperCase();
+            if (!token) return showToast('Masukkan token', 'warning');
+            
+            setBtnLoading('login', true);
+            try {
+                const votersRef = collection(db, publicDataPath, 'voters');
+                const snapshot = await getDocs(votersRef);
+                
+                let foundVoter = null;
+                snapshot.forEach(docSnap => {
+                    const data = docSnap.data();
+                    if (data.token === token) foundVoter = { nisn: docSnap.id, ...data };
+                });
+
+                if (foundVoter) {
+                    if (foundVoter.hasVoted) {
+                        showToast('Token ini sudah digunakan untuk memilih.', 'error');
+                    } else {
+                        currentUser = foundVoter;
+                        closeModal('login-modal');
+                        switchView('voting');
+                    }
+                } else {
+                    showToast('Token tidak valid.', 'error');
+                }
+            } catch (error) {
+                showToast('Terjadi kesalahan', 'error');
+            }
+            setBtnLoading('login', false);
+        };
+
+        window.handleResultsLogin = async () => {
+            const nameEl = document.getElementById('res-name');
+            const nisnEl = document.getElementById('res-nisn');
+            if (!nameEl || !nisnEl) return;
+            
+            const name = nameEl.value.trim();
+            const nisn = nisnEl.value.trim();
+            if (!name || !nisn) return showToast('Isi Nama dan NISN', 'warning');
+            
+            setBtnLoading('res', true);
+            try {
+                const voterRef = doc(db, publicDataPath, 'voters', nisn);
+                const voterSnap = await getDoc(voterRef);
+                
+                if (voterSnap.exists() && voterSnap.data().name.toLowerCase() === name.toLowerCase()) {
+                    if (voterSnap.data().hasVoted) {
+                        closeModal('results-login-modal');
+                        switchView('student-results');
+                    } else {
+                        showToast('Hanya siswa yang sudah memilih yang dapat melihat hasil.', 'error');
+                    }
+                } else {
+                    showToast('Data tidak valid / tidak ditemukan.', 'error');
+                }
+            } catch(e) {
+                 showToast('Terjadi kesalahan', 'error');
+            }
+            setBtnLoading('res', false);
+        };
+
+        function setBtnLoading(prefix, isLoading) {
+            const text = document.getElementById(`btn-text-${prefix}`);
+            const load = document.getElementById(`btn-load-${prefix}`);
+            if (!text || !load) return;
+            if (isLoading) {
+                text.style.opacity = '0.7';
+                load.classList.remove('hidden');
+            } else {
+                text.style.opacity = '1';
+                load.classList.add('hidden');
+            }
+        }
+
+        function getVotingHTML() {
+            let blankVoteHTML = '';
+            if (configData.allowBlankVote) {
+                blankVoteHTML = `
+                    <div class="mt-8 bg-white rounded-2xl shadow-md border border-slate-200 p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div>
+                            <h4 class="text-lg font-bold text-slate-800"><i class="fa-solid fa-ban text-amber-500 mr-2"></i> Golput / Suara Kosong (Blangko)</h4>
+                            <p class="text-sm text-slate-500">Pilih opsi ini jika Anda tidak ingin memilih salah satu paslon di atas.</p>
+                        </div>
+                        <button onclick="confirmVote('BLANK', 'Suara Kosong / Blangko')" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-6 rounded-xl transition shadow-sm whitespace-nowrap">
+                            PILIH SUARA KOSONG
+                        </button>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="max-w-6xl mx-auto fade-in">
+                    <div class="bg-blue-600 text-white rounded-xl p-4 mb-8 flex justify-between items-center shadow-md">
+                        <div>
+                            <p class="text-sm opacity-80">Pemilih aktif:</p>
+                            <p class="font-bold text-lg">${currentUser ? escapeHTML(currentUser.name) : ''} (${currentUser ? escapeHTML(currentUser.nisn) : ''})</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-sm opacity-80">Status</p>
+                            <span class="inline-block px-2 py-1 bg-white/20 rounded text-xs font-medium">Bilik Suara</span>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mb-8">
+                        <h2 class="text-2xl font-bold text-slate-800">Pilih Pasangan Calon Ketua OSIS</h2>
+                        <p class="text-slate-500 mt-2">Pelajari Visi, Misi, dan Program Kerja sebelum menentukan pilihan.</p>
+                    </div>
+
+                    <div id="candidates-container" class="grid md:grid-cols-2 gap-8"></div>
+
+                    ${blankVoteHTML}
+
+                    <!-- AI Chatbot UI -->
+                    <button onclick="toggleAIChat()" class="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-full shadow-xl hover:shadow-2xl flex items-center justify-center text-2xl transition transform hover:scale-105 z-40">
+                        <i class="fa-solid fa-robot"></i>
+                    </button>
+
+                    <div id="ai-chat-panel" class="fixed bottom-24 right-6 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-100 flex flex-col overflow-hidden z-50 transform scale-0 origin-bottom-right transition-transform duration-300">
+                        <div class="bg-gradient-to-r from-purple-500 to-indigo-600 p-4 text-white flex justify-between items-center">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
+                                <h3 class="font-bold">Asisten Pemilih AI</h3>
+                            </div>
+                            <button onclick="toggleAIChat()" class="text-white/80 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <div id="chat-messages" class="h-80 p-4 overflow-y-auto bg-slate-50 flex flex-col gap-3 text-sm scroll-smooth">
+                            <div class="bg-white p-3 rounded-xl rounded-tl-none shadow-sm border border-slate-100 max-w-[85%] text-slate-700">
+                                Halo! Saya Asisten AI. Bingung memilih paslon? Kamu bisa tanya saya untuk <strong>membandingkan visi misi</strong> atau <strong>merangkum proker</strong> mereka!
+                            </div>
+                        </div>
+                        <div class="p-3 bg-white border-t border-slate-100 flex gap-2 items-center">
+                            <input type="text" id="chat-input" placeholder="Ketik pertanyaanmu..." class="flex-1 px-4 py-2 bg-slate-100 rounded-full outline-none focus:ring-2 focus:ring-purple-500 text-sm" onkeypress="if(event.key === 'Enter') sendAIChat()">
+                            <button onclick="sendAIChat()" class="w-10 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full flex items-center justify-center transition shadow-sm hover:shadow">
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.renderVotingCards = () => {
+            const container = document.getElementById('candidates-container');
+            if (!container) return;
+            
+            if (candidatesData.length === 0) {
+                container.innerHTML = '<p class="col-span-2 text-center text-slate-500">Memuat data paslon...</p>';
+                return;
+            }
+
+            container.innerHTML = candidatesData.map((cand) => `
+                <div class="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden flex flex-col transition hover:shadow-lg">
+                    <div class="bg-slate-50 p-6 border-b border-slate-100 flex flex-col items-center">
+                        <div class="w-24 h-24 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-3xl font-bold mb-4 shadow-inner">
+                            0${cand.id}
+                        </div>
+                        <h3 class="text-2xl font-bold text-slate-800 text-center">${escapeHTML(cand.name)}</h3>
+                    </div>
+                    
+                    <div class="p-6 flex-grow space-y-4">
+                        <div>
+                            <h4 class="text-sm font-bold text-blue-600 uppercase tracking-wider mb-1"><i class="fa-solid fa-eye mr-1"></i> Visi</h4>
+                            <p class="text-slate-700 whitespace-pre-line text-sm">${escapeHTML(cand.vision)}</p>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-blue-600 uppercase tracking-wider mb-1"><i class="fa-solid fa-bullseye mr-1"></i> Misi</h4>
+                            <p class="text-slate-700 whitespace-pre-line text-sm">${escapeHTML(cand.mission)}</p>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-blue-600 uppercase tracking-wider mb-1"><i class="fa-solid fa-list-check mr-1"></i> Program Kerja</h4>
+                            <p class="text-slate-700 whitespace-pre-line text-sm">${escapeHTML(cand.proker)}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="p-6 bg-slate-50 border-t border-slate-100 mt-auto">
+                        <button onclick="confirmVote('${cand.docId}', '${escapeHTML(cand.name)}')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition transform hover:-translate-y-0.5">
+                            COBLOS PASLON 0${cand.id}
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        window.confirmVote = (candidateDocId, candidateName) => {
+            const html = `
+                <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 fade-in">
+                    <div class="bg-white p-6 rounded-2xl w-full max-w-sm text-center shadow-2xl">
+                        <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-4">
+                            <i class="fa-solid fa-question"></i>
+                        </div>
+                        <h3 class="text-xl font-bold text-slate-800 mb-2">Konfirmasi Pilihan</h3>
+                        <p class="text-slate-600 mb-6">Apakah Anda yakin ingin memilih <strong class="text-slate-800">${candidateName}</strong>? Pilihan tidak dapat diubah.</p>
+                        <div class="flex space-x-3">
+                            <button onclick="const m = document.getElementById('confirm-modal'); if(m) m.remove();" class="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition">Batal</button>
+                            <button onclick="executeVote('${candidateDocId}')" id="btn-exec-vote" class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition flex justify-center items-center">
+                                <span>Ya, Pilih!</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        };
+
+        window.executeVote = async (candidateDocId) => {
+            if (!currentUser || currentUser.hasVoted) return;
+            const btn = document.getElementById('btn-exec-vote');
+            if(btn) {
+                btn.innerHTML = '<div class="loader w-4 h-4 border-2 border-white border-top-transparent"></div>';
+                btn.disabled = true;
+            }
+
+            try {
+                if (candidateDocId !== 'BLANK') {
+                    const candidateRef = doc(db, publicDataPath, 'candidates', candidateDocId);
+                    const candSnap = await getDoc(candidateRef);
+                    const currentVotes = candSnap.data().votes || 0;
+                    await updateDoc(candidateRef, { votes: currentVotes + 1 });
+                } else {
+                    const blankRef = doc(db, publicDataPath, 'config', 'stats');
+                    const blankSnap = await getDoc(blankRef);
+                    const currentBlank = blankSnap.exists() ? (blankSnap.data().blankVotes || 0) : 0;
+                    await setDoc(blankRef, { blankVotes: currentBlank + 1 }, { merge: true });
+                }
+
+                const voterRef = doc(db, publicDataPath, 'voters', currentUser.nisn);
+                await updateDoc(voterRef, { hasVoted: true, votedAt: new Date().toISOString() });
+
+                logActivity('Voting', `Siswa ${currentUser.name} (${currentUser.nisn}) telah menggunakan hak suara.`);
+                currentUser.hasVoted = true;
+                
+                const modal = document.getElementById('confirm-modal');
+                if(modal) modal.remove();
+                switchView('voted-success');
+            } catch (error) {
+                const modal = document.getElementById('confirm-modal');
+                if(modal) modal.remove();
+                showToast("Terjadi kesalahan saat menyimpan suara.", "error");
+            }
+        };
+
+        function getVotedSuccessHTML() {
+            return `
+                <div class="max-w-lg mx-auto mt-20 text-center fade-in bg-white p-10 rounded-3xl shadow-lg border border-slate-100">
+                    <div class="w-24 h-24 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center text-4xl mx-auto mb-6 shadow-inner">
+                        <i class="fa-solid fa-check"></i>
+                    </div>
+                    <h2 class="text-3xl font-bold text-slate-800 mb-4">Terima Kasih!</h2>
+                    <p class="text-slate-600 mb-8 text-lg">Anda telah berhasil memberikan hak suara pada Pemilihan Ketua OSIS tahun ini.</p>
+                    <button onclick="switchView('home')" class="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-xl transition shadow-md hover:shadow-lg">
+                        Kembali ke Halaman Utama
+                    </button>
+                </div>
+            `;
+        }
+
+        function getAdminLoginHTML() {
+            return `
+                <div class="max-w-sm mx-auto mt-20 bg-white p-8 rounded-2xl shadow-lg border border-slate-100 fade-in">
+                    <div class="text-center mb-6">
+                        <i class="fa-solid fa-user-shield text-4xl text-slate-800 mb-2"></i>
+                        <h2 class="text-2xl font-bold text-slate-800">Admin Login</h2>
+                        <p class="text-xs text-slate-500 mt-1">Pilih peran login Anda</p>
+                    </div>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">Peran Akses</label>
+                            <select id="admin-role-select" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none bg-white text-sm mb-3 focus:border-slate-800">
+                                <option value="operator"> Operator Panitia </option>
+                                <option value="superadmin"> Pembina / Superadmin </option>
+                            </select>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">Password Admin</label>
+                            <input type="password" id="admin-pass" class="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-800 focus:border-slate-800 outline-none text-center tracking-widest text-sm" placeholder="••••••••">
+                        </div>
+                        <button onclick="handleAdminLogin()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg transition text-sm shadow-sm">
+                            Masuk Dashboard
+                        </button>
+                        <button onclick="switchView('home')" class="w-full text-slate-500 text-sm mt-2 hover:text-slate-700">Kembali ke Beranda</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.handleAdminLogin = () => {
+            const pass = document.getElementById('admin-pass').value;
+            const role = document.getElementById('admin-role-select').value;
+            
+            // Password Operator: op2026, Superadmin: kpo2627
+            if (role === 'operator' && pass === 'op2627') {
+                adminRole = 'operator';
+                logActivity('Admin Login', 'Operator Panitia berhasil login.');
+                switchView('admin-dashboard');
+            } else if (role === 'superadmin' && pass === 'kpo2627') {
+                adminRole = 'superadmin';
+                logActivity('Admin Login', 'Superadmin berhasil login.');
+                switchView('admin-dashboard');
+            } else {
+                showToast('Password atau Peran salah!', 'error');
+            }
+        };
+
+        function renderAdminAppearanceForm() {
+            // Appearance settings are natively bound inside getAdminDashboardHTML
+        }
+
+        function getAdminDashboardHTML() {
+            const isSuper = adminRole === 'superadmin';
+            return `
+                <div class="max-w-6xl mx-auto fade-in pb-16">
+                    <div class="flex justify-between items-center mb-8">
+                        <div>
+                            <h2 class="text-2xl font-bold text-slate-800"><i class="fa-solid fa-sliders text-blue-600 mr-2"></i> Panel Admin E-Pilketos</h2>
+                            <p class="text-xs text-slate-500 mt-1">Peran Aktif: <strong class="uppercase text-blue-600">${adminRole}</strong></p>
+                        </div>
+                        <button onclick="logoutAdmin()" class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-sm font-medium transition shadow-sm">Logout</button>
+                    </div>
+
+                    <div class="flex space-x-2 border-b border-slate-200 mb-6 overflow-x-auto">
+                        <button onclick="switchAdminTab('voters')" id="tab-btn-voters" class="px-4 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600 whitespace-nowrap">1. Data Pemilih</button>
+                        <button onclick="switchAdminTab('candidates')" id="tab-btn-candidates" class="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 whitespace-nowrap">2. Data Paslon</button>
+                        <button onclick="switchAdminTab('results')" id="tab-btn-results" class="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 whitespace-nowrap">3. Publikasi & Hasil</button>
+                        <button onclick="switchAdminTab('appearance')" id="tab-btn-appearance" class="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 whitespace-nowrap">4. Teks & Tampilan Web</button>
+                        <button onclick="switchAdminTab('logs')" id="tab-btn-logs" class="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 whitespace-nowrap">5. Log Audit / Aktivitas</button>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                        <!-- Tab 1: Voters -->
+                        <div id="tab-voters" class="space-y-8">
+                            <div class="grid md:grid-cols-2 gap-6">
+                                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-col justify-between">
+                                    <div>
+                                        <h3 class="font-semibold text-slate-800 mb-2">Tambah Pemilih Satuan & Token Otomatis</h3>
+                                        <p class="text-xs text-slate-500 mb-4">NISN ganda akan dicegah secara otomatis oleh sistem.</p>
+                                        <div class="space-y-3">
+                                            <input type="text" id="add-voter-name" placeholder="Nama Lengkap" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 text-sm">
+                                            <input type="text" id="add-voter-nisn" placeholder="Nomor NISN" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 text-sm">
+                                        </div>
+                                    </div>
+                                    <button onclick="handleAddVoter()" class="mt-4 bg-blue-600 hover:bg-blue-700 text-white w-full py-2.5 rounded-lg font-medium transition text-sm">
+                                        <i class="fa-solid fa-plus mr-1"></i> Tambahkan Pemilih
+                                    </button>
+                                </div>
+
+                                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-col justify-between">
+                                    <div>
+                                        <h3 class="font-semibold text-slate-800 mb-2">Impor Data Pemilih Massal (CSV)</h3>
+                                        <p class="text-xs text-slate-500 mb-3">Format baris file CSV: <code class="bg-slate-200 px-1 py-0.5 rounded">Nama,NISN</code> (tanpa spasi berlebih).</p>
+                                        <input type="file" id="csv-file-input" accept=".csv" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                                    </div>
+                                    <button onclick="handleImportCSV()" class="mt-4 bg-emerald-600 hover:bg-emerald-700 text-white w-full py-2.5 rounded-lg font-medium transition text-sm">
+                                        <i class="fa-solid fa-file-arrow-up mr-1"></i> Proses Impor CSV
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="flex justify-between items-center mb-3">
+                                    <h3 class="font-semibold text-slate-800">Daftar Pemilih Terdaftar</h3>
+                                    <span id="voter-count-badge" class="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-medium">0 pemilih</span>
+                                </div>
+                                <div class="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-lg">
+                                    <table class="w-full text-left border-collapse">
+                                        <thead class="sticky top-0 bg-slate-100">
+                                            <tr class="text-slate-600 text-sm">
+                                                <th class="p-3 border-b">NISN</th>
+                                                <th class="p-3 border-b">Nama</th>
+                                                <th class="p-3 border-b">Token</th>
+                                                <th class="p-3 border-b text-center">Status</th>
+                                                <th class="p-3 border-b text-center">Aksi</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="admin-voters-list" class="text-sm text-slate-700">
+                                            <tr><td colspan="5" class="text-center p-4">Memuat data...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 2: Candidates -->
+                        <div id="tab-candidates" class="hidden space-y-6">
+                            <div>
+                                <h3 class="font-semibold text-slate-800 text-lg mb-1">Mengubah Data Paslon & Visi Misi</h3>
+                                <p class="text-sm text-slate-500 mb-4">${isSuper ? 'Ubah detail nama, visi, misi, atau program kerja paslon.' : '<span class="text-red-500 font-medium">Anda login sebagai Operator. Hanya Superadmin yang dapat mengubah data paslon.</span>'}</p>
+                                <div id="admin-candidates-form" class="grid md:grid-cols-2 gap-6"></div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 3: Results & Publishing -->
+                        <div id="tab-results" class="hidden space-y-6">
+                            ${!isSuper ? `
+                                <div class="p-6 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl">
+                                    <i class="fa-solid fa-lock mr-2"></i> Menu Publikasi dan Pengaturan Jadwal terkunci. Hanya <strong>Superadmin</strong> yang memiliki akses penuh ke menu ini.
+                                </div>
+                            ` : ''}
+                            <div class="grid md:grid-cols-2 gap-6">
+                                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-4">
+                                    <h3 class="font-semibold text-slate-800">Publikasi Hasil & Bilik Suara</h3>
+                                    <div class="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200">
+                                        <div>
+                                            <p class="font-medium text-slate-800 text-sm">Publikasi Hasil ke Siswa</p>
+                                            <p class="text-xs text-slate-500">Buka akses agar siswa dapat melihat persentase.</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="publish-toggle" onchange="togglePublish()" class="sr-only peer" ${configData.resultsPublished ? 'checked' : ''} ${!isSuper ? 'disabled' : ''}>
+                                            <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                        </label>
+                                    </div>
+                                    <div class="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200">
+                                        <div>
+                                            <p class="font-medium text-slate-800 text-sm">Izinkan Suara Kosong (Blangko)</p>
+                                            <p class="text-xs text-slate-500">Sediakan opsi golput di bilik suara.</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="blank-toggle" onchange="toggleBlankVote()" class="sr-only peer" ${configData.allowBlankVote !== false ? 'checked' : ''} ${!isSuper ? 'disabled' : ''}>
+                                            <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-4">
+                                    <h3 class="font-semibold text-slate-800">Jadwal Otomatis Pemilihan</h3>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-xs font-medium text-slate-600 mb-1">Waktu Mulai</label>
+                                            <input type="datetime-local" id="sched-start" value="${configData.startTime || ''}" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-medium text-slate-600 mb-1">Waktu Selesai</label>
+                                            <input type="datetime-local" id="sched-end" value="${configData.endTime || ''}" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>
+                                        </div>
+                                        ${isSuper ? `
+                                            <button onclick="saveSchedule()" class="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-lg text-sm font-medium transition">
+                                                Simpan Jadwal Otomatis
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                                    <div>
+                                        <h3 class="font-semibold text-slate-800 text-lg">Hasil Pemilihan Suara Secara Real-Time</h3>
+                                        <p class="text-sm text-slate-500">Statistik lengkap perolehan suara paslon dan suara kosong.</p>
+                                    </div>
+                                    <button onclick="openReportModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm flex items-center gap-2">
+                                        <i class="fa-solid fa-print"></i> Cetak Berita Acara / Laporan
+                                    </button>
+                                </div>
+                                <div id="admin-live-results" class="space-y-4"></div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 4: Appearance -->
+                        <div id="tab-appearance" class="hidden space-y-6">
+                            ${!isSuper ? `
+                                <div class="p-6 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl mb-4">
+                                    <i class="fa-solid fa-lock mr-2"></i> Menu Tampilan & Teks Website terkunci untuk Operator.
+                                </div>
+                            ` : ''}
+                            <h3 class="font-semibold text-slate-800 text-lg mb-1">Pengaturan Tampilan & Teks Website</h3>
+                            <p class="text-sm text-slate-500 mb-4">Ubah judul, subjudul, logo, atau banner utama website secara instan.</p>
+                            
+                            <div class="grid md:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-xl border border-slate-200">
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Judul Website</label>
+                                        <input type="text" id="setting-title" value="${escapeHTML(configData.appTitle || '')}" class="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none bg-white" ${!isSuper ? 'disabled' : ''}>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Subjudul / Deskripsi</label>
+                                        <input type="text" id="setting-subtitle" value="${escapeHTML(configData.appSubtitle || '')}" class="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none bg-white" ${!isSuper ? 'disabled' : ''}>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Upload Logo Sekolah (Galeri)</label>
+                                        <input type="file" id="setting-logo-file" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700" ${!isSuper ? 'disabled' : ''}>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Upload Banner Utama (Galeri)</label>
+                                        <input type="file" id="setting-hero-file" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700" ${!isSuper ? 'disabled' : ''}>
+                                    </div>
+                                    ${isSuper ? `
+                                        <button onclick="saveAppearanceSettings()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition shadow-sm">
+                                            Simpan Perubahan Tampilan
+                                        </button>
+                                    ` : ''}
+                                </div>
+
+                                <div class="flex flex-col justify-center items-center p-6 bg-white rounded-xl border border-slate-200 text-center">
+                                    <h4 class="font-semibold text-slate-800 mb-2">Pratinjau Halaman Utama</h4>
+                                    <p class="text-sm text-slate-500 mb-6">Klik tombol di bawah untuk meninjau perubahan langsung dari sudut pandang siswa.</p>
+                                    <button onclick="switchView('home')" class="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-lg transition shadow-sm">
+                                        <i class="fa-solid fa-eye mr-2"></i> Tinjau Halaman Utama
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 5: Audit Logs -->
+                        <div id="tab-logs" class="hidden space-y-6">
+                            <div class="flex justify-between items-center mb-3">
+                                <div>
+                                    <h3 class="font-semibold text-slate-800 text-lg">Log Audit & Riwayat Aktivitas Sistem</h3>
+                                    <p class="text-sm text-slate-500">Mencatat aktivitas penting secara kronologis demi transparansi pemilu.</p>
+                                </div>
+                                <span class="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-medium">${auditLogsData.length} aktivitas tercatat</span>
+                            </div>
+                            <div class="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-lg">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="sticky top-0 bg-slate-100">
+                                        <tr class="text-slate-600 text-sm">
+                                            <th class="p-3 border-b">Waktu</th>
+                                            <th class="p-3 border-b">Aksi</th>
+                                            <th class="p-3 border-b">Keterangan / Detail</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-logs-list" class="text-sm text-slate-700">
+                                        <tr><td colspan="3" class="text-center p-4">Memuat log aktivitas...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Report / Berita Acara Modal -->
+                <div id="report-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4 overflow-y-auto">
+                    <div class="bg-white rounded-2xl p-8 w-full max-w-3xl shadow-2xl relative my-8">
+                        <div class="flex justify-between items-center mb-6 no-print">
+                            <h3 class="text-xl font-bold text-slate-800">Berita Acara Resmi Pemilihan</h3>
+                            <button onclick="closeModal('report-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                        </div>
+                        
+                        <div id="report-printable-area" class="space-y-6 text-slate-800">
+                            <div class="text-center border-b-2 border-slate-800 pb-4">
+                                <h1 class="text-2xl font-bold uppercase tracking-wide">BERITA ACARA</h1>
+                                <h2 class="text-lg font-semibold text-slate-600 uppercase">PEMILIHAN KETUA OSIS</h2>
+                                <p class="text-sm text-slate-500 mt-1">${escapeHTML(configData.appTitle || 'E-Pilketos')}</p>
+                            </div>
+                            
+                            <p class="text-sm leading-relaxed text-justify">
+                                Pada hari ini, dokumen Berita Acara ini diterbitkan secara otomatis oleh sistem digital <strong>E-Pilketos OSIS</strong> untuk mencatat hasil rekapitulasi perolehan suara pemilihan Ketua OSIS periode tahun berjalan dengan rincian sebagai berikut:
+                            </p>
+
+                            <div id="report-candidates-list" class="space-y-3"></div>
+
+                            <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm">
+                                <p><strong>Total Pemilih Terdaftar:</strong> <span id="rep-total-voters">0</span> siswa</p>
+                                <p><strong>Total Suara Masuk:</strong> <span id="rep-total-voted">0</span> suara</p>
+                                <p><strong>Partisipasi Pemilih:</strong> <span id="rep-turnout">0%</span></p>
+                            </div>
+
+                            <p class="text-sm text-slate-600 text-justify">
+                                Demikian berita acara ini dibuat secara akurat dan transparan sesuai dengan data real-time database sistem pemilihan.
+                            </p>
+
+                            <div class="grid grid-cols-2 gap-8 pt-10 text-center text-sm">
+                                <div>
+                                    <p class="mb-16">Ketua Panitia Pemilihan,</p>
+                                    <p class="font-bold underline">Panitia Pelaksana</p>
+                                </div>
+                                <div>
+                                    <p class="mb-16">Pembina OSIS / Sekolah,</p>
+                                    <p class="font-bold underline">Pihak Sekolah</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-8 flex justify-end gap-3 pt-4 border-t border-slate-100 no-print">
+                            <button onclick="closeModal('report-modal')" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg transition">Tutup</button>
+                            <button onclick="window.print()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition shadow-sm flex items-center gap-2">
+                                <i class="fa-solid fa-print"></i> Cetak Dokumen / PDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.switchAdminTab = (tabName) => {
+            ['voters', 'candidates', 'results', 'appearance', 'logs'].forEach(t => {
+                const el = document.getElementById(`tab-${t}`);
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (el) el.classList.add('hidden');
+                if (btn) {
+                    btn.className = "px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 whitespace-nowrap";
+                }
+            });
+            const activeEl = document.getElementById(`tab-${tabName}`);
+            const activeBtn = document.getElementById(`tab-btn-${tabName}`);
+            if (activeEl) activeEl.classList.remove('hidden');
+            if (activeBtn) {
+                activeBtn.className = "px-4 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600 whitespace-nowrap";
+            }
+        };
+
+        window.handleAddVoter = async () => {
+            const nameEl = document.getElementById('add-voter-name');
+            const nisnEl = document.getElementById('add-voter-nisn');
+            if (!nameEl || !nisnEl) return;
+
+            const name = nameEl.value.trim();
+            const nisn = nisnEl.value.trim();
+            if (!name || !nisn) return showToast('Nama dan NISN harus diisi', 'warning');
+
+            try {
+                const voterRef = doc(db, publicDataPath, 'voters', nisn);
+                const voterSnap = await getDoc(voterRef);
+                if (voterSnap.exists()) {
+                    return showToast('NISN sudah terdaftar di sistem!', 'error');
+                }
+
+                const randomToken = Math.random().toString(36).substring(2, 8).toUpperCase();
+                await setDoc(voterRef, {
+                    name: name,
+                    token: randomToken,
+                    hasVoted: false
+                });
+
+                logActivity('Tambah Pemilih', `Admin menambahkan pemilih ${name} (${nisn})`);
+                nameEl.value = '';
+                nisnEl.value = '';
+                showToast('Pemilih berhasil ditambahkan!', 'success');
+            } catch (e) {
+                showToast('Gagal menambahkan pemilih', 'error');
+            }
+        };
+
+        window.handleImportCSV = async () => {
+            const fileInput = document.getElementById('csv-file-input');
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                return showToast('Pilih file CSV terlebih dahulu', 'warning');
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const text = e.target.result;
+                const lines = text.split(/\r\n|\n/);
+                let count = 0;
+
+                for (let line of lines) {
+                    if (!line.trim()) continue;
+                    const parts = line.split(',');
+                    if (parts.length >= 2) {
+                        const name = parts[0].trim();
+                        const nisn = parts[1].trim();
+                        if (name && nisn) {
+                            try {
+                                const voterRef = doc(db, publicDataPath, 'voters', nisn);
+                                const voterSnap = await getDoc(voterRef);
+                                if (!voterSnap.exists()) {
+                                    const randomToken = Math.random().toString(36).substring(2, 8).toUpperCase();
+                                    await setDoc(voterRef, {
+                                        name: name,
+                                        token: randomToken,
+                                        hasVoted: false
+                                    });
+                                    count++;
+                                }
+                            } catch (err) {}
+                        }
+                    }
+                }
+                fileInput.value = '';
+                logActivity('Impor CSV', `Admin mengimpor ${count} data pemilih via CSV.`);
+                showToast(`Berhasil mengimpor ${count} pemilih baru!`, 'success');
+            };
+            reader.readAsText(file);
+        };
+
+        function renderAdminVotersTable() {
+            const tbody = document.getElementById('admin-voters-list');
+            const badge = document.getElementById('voter-count-badge');
+            if (!tbody) return;
+
+            if (badge) badge.innerText = `${votersData.length} pemilih`;
+
+            if (votersData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4 text-slate-400">Belum ada pemilih terdaftar.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = votersData.map(v => `
+                <tr class="border-b border-slate-100 hover:bg-slate-50">
+                    <td class="p-3 font-mono text-xs">${escapeHTML(v.nisn)}</td>
+                    <td class="p-3 font-medium">${escapeHTML(v.name)}</td>
+                    <td class="p-3 font-mono font-bold text-blue-600">${escapeHTML(v.token)}</td>
+                    <td class="p-3 text-center">
+                        ${v.hasVoted ? '<span class="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">Sudah Memilih</span>' : '<span class="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">Belum</span>'}
+                    </td>
+                    <td class="p-3 text-center">
+                        <button onclick="deleteVoter('${escapeHTML(v.nisn)}')" class="text-red-500 hover:text-red-700 text-sm p-1" title="Hapus Pemilih">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        window.deleteVoter = async (nisn) => {
+            if (confirm('Yakin ingin menghapus pemilih ini?')) {
+                try {
+                    await deleteDoc(doc(db, publicDataPath, 'voters', nisn));
+                    logActivity('Hapus Pemilih', `Admin menghapus pemilih NISN: ${nisn}`);
+                    showToast('Pemilih berhasil dihapus', 'success');
+                } catch (e) {
+                    showToast('Gagal menghapus pemilih', 'error');
+                }
+            }
+        };
+
+        function renderAdminCandidatesForm() {
+            const container = document.getElementById('admin-candidates-form');
+            const isSuper = adminRole === 'superadmin';
+            if (!container) return;
+
+            container.innerHTML = candidatesData.map(cand => `
+                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-4">
+                    <h4 class="font-bold text-slate-800 text-base">Paslon 0${cand.id}</h4>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">Nama Pasangan Calon</label>
+                        <input type="text" id="edit-name-${cand.docId}" value="${escapeHTML(cand.name)}" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="text-xs font-medium text-slate-600">Visi</label>
+                            ${isSuper ? `<button onclick="enhanceTextAI('vision', '${cand.docId}')" class="text-xs text-purple-600 hover:text-purple-700 font-medium"><i class="fa-solid fa-wand-magic-sparkles"></i> Perbaiki dgn AI</button>` : ''}
+                        </div>
+                        <textarea id="edit-vision-${cand.docId}" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>${escapeHTML(cand.vision)}</textarea>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="text-xs font-medium text-slate-600">Misi</label>
+                            ${isSuper ? `<button onclick="enhanceTextAI('mission', '${cand.docId}')" class="text-xs text-purple-600 hover:text-purple-700 font-medium"><i class="fa-solid fa-wand-magic-sparkles"></i> Perbaiki dgn AI</button>` : ''}
+                        </div>
+                        <textarea id="edit-mission-${cand.docId}" rows="3" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>${escapeHTML(cand.mission)}</textarea>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="text-xs font-medium text-slate-600">Program Kerja</label>
+                            ${isSuper ? `<button onclick="enhanceTextAI('proker', '${cand.docId}')" class="text-xs text-purple-600 hover:text-purple-700 font-medium"><i class="fa-solid fa-wand-magic-sparkles"></i> Perbaiki dgn AI</button>` : ''}
+                        </div>
+                        <textarea id="edit-proker-${cand.docId}" rows="3" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white" ${!isSuper ? 'disabled' : ''}>${escapeHTML(cand.proker)}</textarea>
+                    </div>
+                    ${isSuper ? `
+                        <button onclick="saveCandidate('${cand.docId}')" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-medium transition">
+                            Simpan Perubahan Paslon 0${cand.id}
+                        </button>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        window.saveCandidate = async (docId) => {
+            const nameEl = document.getElementById(`edit-name-${docId}`);
+            const visionEl = document.getElementById(`edit-vision-${docId}`);
+            const missionEl = document.getElementById(`edit-mission-${docId}`);
+            const prokerEl = document.getElementById(`edit-proker-${docId}`);
+            
+            if (!nameEl || !visionEl || !missionEl || !prokerEl) return;
+
+            try {
+                await updateDoc(doc(db, publicDataPath, 'candidates', docId), {
+                    name: nameEl.value.trim(),
+                    vision: visionEl.value.trim(),
+                    mission: missionEl.value.trim(),
+                    proker: prokerEl.value.trim()
+                });
+                logActivity('Ubah Paslon', `Admin memperbarui data Paslon ID: ${docId}`);
+                showToast('Data paslon berhasil disimpan!', 'success');
+            } catch (e) {
+                showToast('Gagal menyimpan paslon', 'error');
+            }
+        };
+
+        window.enhanceTextAI = async (field, docId) => {
+            const inputEl = document.getElementById(`edit-${field}-${docId}`);
+            if (!inputEl || !inputEl.value.trim()) return showToast('Isi teks terlebih dahulu sebelum ditingkatkan AI.', 'warning');
+
+            showToast('Memperbaiki teks dengan AI...', 'info');
+            try {
+                const systemPrompt = "Anda adalah asisten editor teks profesional untuk organisasi sekolah. Tugas Anda adalah merapikan, menyempurnakan tata bahasa, dan membuat teks visi/misi/proker pemilihan OSIS ini menjadi lebih profesional, visioner, dan terstruktur dengan tetap mempertahankan makna aslinya. Berikan hasil akhirnya saja tanpa penjelasan tambahan.";
+                const userQuery = `Perbaiki teks ${field} berikut: ${inputEl.value}`;
+                
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=`;
+                const payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const enhanced = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (enhanced) {
+                    inputEl.value = enhanced.trim();
+                    showToast('Teks berhasil disempurnakan oleh AI!', 'success');
+                } else {
+                    showToast('Gagal memproses AI', 'error');
+                }
+            } catch (err) {
+                showToast('Terjadi kesalahan koneksi AI', 'error');
+            }
+        };
+
+        function renderAdminLiveResults() {
+            const container = document.getElementById('admin-live-results');
+            if (!container) return;
+
+            let totalVotes = candidatesData.reduce((acc, c) => acc + (c.votes || 0), 0);
+            
+            container.innerHTML = candidatesData.map(cand => {
+                const votes = cand.votes || 0;
+                const pct = totalVotes > 0 ? ((votes / totalVotes) * 100).toFixed(1) : 0;
+                return `
+                    <div>
+                        <div class="flex justify-between items-center mb-1 text-sm font-medium">
+                            <span>Paslon 0${cand.id} - ${escapeHTML(cand.name)}</span>
+                            <span>${votes} suara (${pct}%)</span>
+                        </div>
+                        <div class="w-full bg-slate-200 h-3 rounded-full overflow-hidden">
+                            <div class="bg-blue-600 h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        window.togglePublish = async () => {
+            const toggle = document.getElementById('publish-toggle');
+            if (!toggle) return;
+            try {
+                await setDoc(doc(db, publicDataPath, 'config', 'settings'), {
+                    resultsPublished: toggle.checked
+                }, { merge: true });
+                logActivity('Publikasi Hasil', `Status publikasi hasil diubah menjadi: ${toggle.checked}`);
+                showToast(toggle.checked ? 'Hasil berhasil dipublikasikan!' : 'Publikasi hasil ditutup.', 'success');
+            } catch (e) {
+                showToast('Gagal memperbarui status publikasi', 'error');
+            }
+        };
+
+        window.toggleBlankVote = async () => {
+            const toggle = document.getElementById('blank-toggle');
+            if (!toggle) return;
+            try {
+                await setDoc(doc(db, publicDataPath, 'config', 'settings'), {
+                    allowBlankVote: toggle.checked
+                }, { merge: true });
+                showToast('Pengaturan suara kosong diperbarui', 'success');
+            } catch (e) {
+                showToast('Gagal memperbarui pengaturan', 'error');
+            }
+        };
+
+        window.saveSchedule = async () => {
+            const startEl = document.getElementById('sched-start');
+            const endEl = document.getElementById('sched-end');
+            if (!startEl || !endEl) return;
+            
+            try {
+                await setDoc(doc(db, publicDataPath, 'config', 'settings'), {
+                    startTime: startEl.value,
+                    endTime: endEl.value
+                }, { merge: true });
+                logActivity('Jadwal Pemilu', `Jadwal pemilu diperbarui.`);
+                showToast('Jadwal pemilihan otomatis berhasil disimpan!', 'success');
+            } catch (e) {
+                showToast('Gagal menyimpan jadwal', 'error');
+            }
+        };
+
+        window.openReportModal = async () => {
+            let totalVoted = votersData.filter(v => v.hasVoted).length;
+            let totalVoters = votersData.length;
+            let turnout = totalVoters > 0 ? ((totalVoted / totalVoters) * 100).toFixed(1) : 0;
+
+            const repTotalVoters = document.getElementById('rep-total-voters');
+            const repTotalVoted = document.getElementById('rep-total-voted');
+            const repTurnout = document.getElementById('rep-turnout');
+            
+            if (repTotalVoters) repTotalVoters.innerText = totalVoters;
+            if (repTotalVoted) repTotalVoted.innerText = totalVoted;
+            if (repTurnout) repTurnout.innerText = turnout + '%';
+
+            let totalVotes = candidatesData.reduce((acc, c) => acc + (c.votes || 0), 0);
+            const listEl = document.getElementById('report-candidates-list');
+            if (listEl) {
+                listEl.innerHTML = candidatesData.map(cand => {
+                    const votes = cand.votes || 0;
+                    const pct = totalVotes > 0 ? ((votes / totalVotes) * 100).toFixed(1) : 0;
+                    return `
+                        <div class="flex justify-between items-center p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                            <span><strong>Paslon 0${cand.id}:</strong> ${escapeHTML(cand.name)}</span>
+                            <span><strong>${votes} suara</strong> (${pct}%)</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            openModal('report-modal');
+        };
+
+        function renderAdminAuditLogsTable() {
+            const tbody = document.getElementById('admin-logs-list');
+            if (!tbody) return;
+
+            if (auditLogsData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center p-4 text-slate-400">Belum ada aktivitas tercatat.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = auditLogsData.map(log => {
+                const dateStr = new Date(log.timestamp).toLocaleString('id-ID');
+                return `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50">
+                        <td class="p-3 font-mono text-xs text-slate-500 whitespace-nowrap">${escapeHTML(dateStr)}</td>
+                        <td class="p-3 font-semibold text-blue-600 whitespace-nowrap">${escapeHTML(log.action)}</td>
+                        <td class="p-3 text-slate-700">${escapeHTML(log.details)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        window.saveAppearanceSettings = async () => {
+            const titleEl = document.getElementById('setting-title');
+            const subtitleEl = document.getElementById('setting-subtitle');
+            const logoFileEl = document.getElementById('setting-logo-file');
+            const heroFileEl = document.getElementById('setting-hero-file');
+
+            showToast('Menyimpan pengaturan...', 'info');
+            try {
+                let logoUrl = configData.logoUrl;
+                let heroImage = configData.heroImage;
+
+                if (logoFileEl && logoFileEl.files[0]) {
+                    logoUrl = await fileToBase64(logoFileEl.files[0]);
+                }
+                if (heroFileEl && heroFileEl.files[0]) {
+                    heroImage = await fileToBase64(heroFileEl.files[0]);
+                }
+
+                await setDoc(doc(db, publicDataPath, 'config', 'settings'), {
+                    appTitle: titleEl ? titleEl.value.trim() : configData.appTitle,
+                    appSubtitle: subtitleEl ? subtitleEl.value.trim() : configData.appSubtitle,
+                    logoUrl: logoUrl,
+                    heroImage: heroImage
+                }, { merge: true });
+
+                logActivity('Tampilan Web', 'Admin memperbarui teks atau gambar tampilan website.');
+                showToast('Pengaturan tampilan berhasil disimpan!', 'success');
+            } catch (e) {
+                showToast('Gagal menyimpan gambar/tampilan', 'error');
+            }
+        };
+
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        function getStudentResultsHTML() {
+            let totalVotes = candidatesData.reduce((acc, c) => acc + (c.votes || 0), 0);
+            return `
+                <div class="max-w-4xl mx-auto fade-in">
+                    <div class="text-center mb-8">
+                        <div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full mb-3 shadow-sm">
+                            <i class="fa-solid fa-chart-pie text-2xl"></i>
+                        </div>
+                        <h2 class="text-3xl font-bold text-slate-800">Hasil Resmi Pemilihan Ketua OSIS</h2>
+                        <p class="text-slate-500 mt-1">Berikut adalah perolehan suara yang telah disahkan oleh panitia.</p>
+                    </div>
+
+                    <div class="bg-white rounded-2xl shadow-md border border-slate-200 p-8 space-y-6">
+                        ${candidatesData.map(cand => {
+                            const votes = cand.votes || 0;
+                            const pct = totalVotes > 0 ? ((votes / totalVotes) * 100).toFixed(1) : 0;
+                            return `
+                                <div class="space-y-2">
+                                    <div class="flex justify-between items-center font-bold text-slate-800">
+                                        <span>Paslon 0${cand.id} - ${escapeHTML(cand.name)}</span>
+                                        <span class="text-blue-600">${votes} suara (${pct}%)</span>
+                                    </div>
+                                    <div class="w-full bg-slate-100 h-4 rounded-full overflow-hidden border border-slate-200 shadow-inner">
+                                        <div class="bg-blue-600 h-full rounded-full transition-all duration-700" style="width: ${pct}%"></div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+
+                    <div class="text-center mt-8">
+                        <button onclick="switchView('home')" class="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-xl transition shadow-sm">
+                            Kembali ke Beranda
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.renderStudentResultsData = () => {
+            const currentViewEl = document.getElementById('current-view-name');
+            const currentView = currentViewEl ? currentViewEl.value : 'home';
+            if (currentView === 'student-results') {
+                const container = document.getElementById('app-content');
+                if (container) container.innerHTML = getStudentResultsHTML();
+            }
+        };
+
+        window.logoutAdmin = () => {
+            logActivity('Admin Logout', `Admin dengan peran ${adminRole} keluar.`);
+            adminRole = null;
+            switchView('home');
+        };
+
+        window.toggleAIChat = () => {
+            const panel = document.getElementById('ai-chat-panel');
+            if (!panel) return;
+            if (panel.classList.contains('scale-0')) {
+                panel.classList.remove('scale-0');
+                panel.classList.add('scale-100');
+            } else {
+                panel.classList.remove('scale-100');
+                panel.classList.add('scale-0');
+            }
+        };
+
+        window.sendAIChat = async () => {
+            const input = document.getElementById('chat-input');
+            const messages = document.getElementById('chat-messages');
+            if (!input || !messages) return;
+            
+            const query = input.value.trim();
+            if (!query) return;
+
+            messages.innerHTML += `
+                <div class="bg-indigo-600 text-white p-3 rounded-xl rounded-tr-none shadow-sm max-w-[85%] ml-auto">
+                    ${escapeHTML(query)}
+                </div>
+            `;
+            input.value = '';
+            messages.scrollTop = messages.scrollHeight;
+
+            let candidatesContext = candidatesData.map(c => `Paslon 0${c.id} (${c.name}): Visi: ${c.vision}. Misi: ${c.mission}. Proker: ${c.proker}`).join('\n');
+            const systemPrompt = `Anda adalah Asisten AI pemilu OSIS yang netral dan membantu siswa. Berikut adalah data kandidat:\n${candidatesContext}\nJawablah pertanyaan pemilih dengan singkat, jelas, dan objektif.`;
+
+            try {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=`;
+                const payload = {
+                    contents: [{ parts: [{ text: query }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const reply = result.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, saya sedang tidak dapat merespon.";
+
+                messages.innerHTML += `
+                    <div class="bg-white p-3 rounded-xl rounded-tl-none shadow-sm border border-slate-100 max-w-[85%] text-slate-700">
+                        ${escapeHTML(reply)}
+                    </div>
+                `;
+                messages.scrollTop = messages.scrollHeight;
+            } catch (e) {
+                messages.innerHTML += `
+                    <div class="bg-white p-3 rounded-xl rounded-tl-none shadow-sm border border-slate-100 max-w-[85%] text-red-500">
+                        Gagal terhubung ke AI.
+                    </div>
+                `;
+            }
+        };
+
+        function escapeHTML(str) {
+            if (!str) return '';
+            return str.replace(/[&<>'"]/g, 
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
+
+        function showToast(message, type = 'info') {
+            const existing = document.getElementById('toast-notification');
+            if (existing) existing.remove();
+
+            const bg = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-red-600' : type === 'warning' ? 'bg-amber-600' : 'bg-blue-600';
+            const html = `
+                <div id="toast-notification" class="fixed top-6 right-6 ${bg} text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-3 fade-in font-medium text-sm">
+                    <span>${message}</span>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+            setTimeout(() => {
+                const el = document.getElementById('toast-notification');
+                if (el) el.remove();
+            }, 3500);
+        }
+
+        function hideLoading() {
+            const loader = document.getElementById('initial-loader');
+            if (loader) loader.style.display = 'none';
+        }
+
+        window.onload = initApp;
+    </script>
+</head>
+<body class="min-h-screen flex flex-col justify-between selection:bg-blue-500 selection:text-white">
+    <!-- Initial Loader -->
+    <div id="initial-loader" class="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center z-50 text-white">
+        <div class="loader mb-4"></div>
+        <p class="font-medium text-lg">Memuat E-Pilketos OSIS...</p>
+    </div>
+
+    <!-- Hidden view tracker -->
+    <input type="hidden" id="current-view-name" value="home">
+
+    <!-- Navbar -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
+            <div class="flex items-center gap-3 cursor-pointer" onclick="switchView('home')">
+                <div id="navbar-logo-container" class="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-bold text-lg shadow-md overflow-hidden">
+                    E
+                </div>
+                <span id="navbar-brand-text" class="font-bold text-lg text-slate-800 tracking-tight">E-Pilketos</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <button onclick="switchView('home')" class="text-sm font-medium text-slate-600 hover:text-blue-600 transition px-3 py-2 rounded-lg hover:bg-slate-50">Beranda</button>
+                <button onclick="switchView('admin-login')" class="text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 transition px-4 py-2 rounded-lg shadow-sm flex items-center gap-2">
+                    <i class="fa-solid fa-user-shield"></i> Panel Admin
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dynamic Content -->
+    <main class="flex-grow max-w-6xl w-full mx-auto px-4 py-8" id="app-content">
+        <!-- Rendered dynamically -->
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-200 py-6 mt-12">
+        <div class="max-w-6xl mx-auto px-4 text-center text-sm text-slate-500">
+            <p>&copy; 2026 E-Pilketos OSIS Digital. Dilindungi Undang-Undang Pemilu Sekolah.</p>
+        </div>
+    </footer>
+</body>
+</html>
